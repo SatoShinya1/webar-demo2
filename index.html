@@ -40,148 +40,87 @@
   </div>
 
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const menu = document.getElementById('selection-menu');
-      const arContainer = document.getElementById('ar-container');
-      const scene = document.querySelector('a-scene');
-      const marker = document.getElementById('marker');
-      const backButton = document.getElementById('btn-back');
+  // 追加: THREEのベクトル→A-Frame属性文字列
+  function vecToAttr(v){ return `${v.x} ${v.y} ${v.z}`; }
 
-      let placed = false;          // 1回だけ設置するためのフラグ
-      let currentType = null;      // 選択したアニメーション種別
-      let model = null;            // 生成したモデル参照
-      let onFirstFound = null;     // リスナ参照（解除用）
+  // 追加: marker.matrixWorldの回転成分からワールド軸ベクトルを得る
+  function getWorldAxisFromMarker(markerObj3D, axis /* 'x' | 'y' | 'z' */){
+    const m = new THREE.Matrix4();
+    m.extractRotation(markerObj3D.matrixWorld);
+    const v = new THREE.Vector3(
+      axis === 'x' ? 1 : 0,
+      axis === 'y' ? 1 : 0,
+      axis === 'z' ? 1 : 0
+    );
+    v.applyMatrix4(m).normalize(); // ワールド方向ベクトル
+    return v;
+  }
 
-      // メニューの各ボタン
-      document.querySelectorAll('#selection-menu button').forEach(btn => {
-        btn.addEventListener('click', () => {
-          currentType = btn.getAttribute('data-type');
-          startAR();
-        });
+  // 既存: マーカー姿勢を一度だけモデルへコピー
+  function copyMarkerWorldTransformTo(entity) {
+    const mObj = marker.object3D;
+    const eObj = entity.object3D;
+    eObj.matrix.copy(mObj.matrixWorld);
+    eObj.matrix.decompose(eObj.position, eObj.quaternion, eObj.scale);
+  }
+
+  // ここを差し替え: “マーカーの向き”に沿ってP1を計算しpositionアニメ
+  function applyAnimation(entity, type) {
+    const eObj = entity.object3D;
+
+    // 出現直後のワールド座標をfromにする
+    const P0 = eObj.position.clone();
+
+    // マーカー基準の左右方向をワールドに変換
+    // left  = マーカーの -X 方向、right = +X 方向
+    // approach/away は従来どおりスケールで演出（向きは保持）
+    const moveDist = 5; // 任意の距離(調整可)
+
+    if (type === 'left' || type === 'right') {
+      const xAxis = getWorldAxisFromMarker(marker.object3D, 'x'); // +X
+      const dir = (type === 'left') ? xAxis.clone().multiplyScalar(-1)
+                                    : xAxis.clone();               // -X or +X
+      const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
+
+      // マーカーの向きをそのまま使うので rotation は設定しない
+      entity.setAttribute('scale', '3 3 3');
+      entity.setAttribute('animation', {
+        property: 'position',
+        from: vecToAttr(P0),
+        to: vecToAttr(P1),
+        dur: 4000,
+        dir: 'alternate',   // 行ったり来たり
+        loop: true
       });
+      return;
+    }
 
-      backButton.addEventListener('click', showMenu);
+    if (type === 'approach') {
+      // 近づく演出はスケールのみ（向きは marker のまま）
+      entity.setAttribute('scale', '1 1 1');
+      entity.setAttribute('animation', {
+        property: 'scale',
+        from: '1 1 1',
+        to: '10 10 10',
+        dur: 15000,
+        loop: false
+      });
+      return;
+    }
 
-      // マーカー姿勢を一度だけコピーしてモデルを出す
-      function handleFirstMarkerFound() {
-        if (placed) return;
+    if (type === 'away') {
+      entity.setAttribute('scale', '10 10 10');
+      entity.setAttribute('animation', {
+        property: 'scale',
+        from: '10 10 10',
+        to: '1 1 1',
+        dur: 20000,
+        loop: false
+      });
+      return;
+    }
+  }
+</script>
 
-        // モデル生成（初期は非表示でもOKだが、ここで作るのでvisibleデフォでOK）
-        model = document.createElement('a-entity');
-        model.setAttribute('id', 'current-model');
-        model.setAttribute('gltf-model', 'bird3.glb');
-
-        // マーカーのワールド行列をモデルにコピー
-        copyMarkerWorldTransformTo(model);
-
-        // 選択タイプに応じてアニメ設定
-        applyAnimation(model, currentType);
-
-        // シーン直下に追加（以後はマーカーと無関係）
-        scene.appendChild(model);
-
-        placed = true;
-
-        // 一度限りのリスナーを解除
-        if (onFirstFound) {
-          marker.removeEventListener('markerFound', onFirstFound);
-          onFirstFound = null;
-        }
-      }
-
-      function startAR() {
-        // 画面切替
-        menu.classList.add('hidden');
-        arContainer.classList.remove('hidden');
-        setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
-
-        // 前回の残骸クリア
-        cleanupModel();
-
-        placed = false;
-
-        // 一回だけ発火する markerFound リスナー
-        onFirstFound = handleFirstMarkerFound;
-        marker.addEventListener('markerFound', onFirstFound, { once: true });
-      }
-
-      function showMenu() {
-        arContainer.classList.add('hidden');
-        menu.classList.remove('hidden');
-        cleanupModel();
-        placed = false;
-        currentType = null;
-        if (onFirstFound) {
-          marker.removeEventListener('markerFound', onFirstFound);
-          onFirstFound = null;
-        }
-      }
-
-      function cleanupModel() {
-        const existing = document.getElementById('current-model');
-        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
-        model = null;
-      }
-
-      // マーカーのワールド姿勢を entity にコピー
-      function copyMarkerWorldTransformTo(entity) {
-        const mObj = marker.object3D;
-        const eObj = entity.object3D;
-        // matrixWorld を分解して position/rotation/scale を反映
-        eObj.matrix.copy(mObj.matrixWorld);
-        eObj.matrix.decompose(eObj.position, eObj.quaternion, eObj.scale);
-      }
-
-      // 種別ごとのアニメ設定（以後はマーカーと無関係に動く）
-      function applyAnimation(entity, type) {
-        switch (type) {
-          case 'left': // -X にループ移動
-            entity.setAttribute('rotation', '0 0 90');
-            entity.setAttribute('scale', '3 3 3');
-            entity.setAttribute('animation', {
-              property: 'position',
-              to: '-5 0 0',
-              dur: 4000,
-              dir: 'alternate',
-              loop: true
-            });
-            break;
-          case 'right': // +X にループ移動
-            entity.setAttribute('rotation', '0 0 -90');
-            entity.setAttribute('scale', '3 3 3');
-            entity.setAttribute('animation', {
-              property: 'position',
-              to: '5 0 0',
-              dur: 4000,
-              dir: 'alternate',
-              loop: true
-            });
-            break;
-          case 'approach': // 拡大
-            entity.setAttribute('rotation', '0 0 0');
-            entity.setAttribute('scale', '1 1 1');
-            entity.setAttribute('animation', {
-              property: 'scale',
-              from: '1 1 1',
-              to: '10 10 10',
-              dur: 15000,
-              loop: false
-            });
-            break;
-          case 'away': // 縮小
-            entity.setAttribute('rotation', '0 0 180');
-            entity.setAttribute('scale', '10 10 10');
-            entity.setAttribute('animation', {
-              property: 'scale',
-              from: '10 10 10',
-              to: '1 1 1',
-              dur: 20000,
-              loop: false
-            });
-            break;
-        }
-      }
-    });
-  </script>
 </body>
 </html>
