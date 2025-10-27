@@ -4,32 +4,39 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>ARアニメーション選択</title>
+
+  <!-- 必要ライブラリ（ローカル/公式に差し替えOK） -->
   <script src="aframe.min.js"></script>
   <script src="aframe-ar.js"></script>
-  <script src="cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
   <style>
     html,body{margin:0;padding:0;overflow:hidden;width:100%;height:100%;font-family:'Inter',sans-serif;box-sizing:border-box}
     #ar-container,#selection-menu{width:100%;height:100%}
-    a-scene[embedded],.a-canvas,video{position:absolute!important;top:0!important;left:0!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important}
+    a-scene[embedded],.a-canvas,video{
+      position:absolute!important;top:0!important;left:0!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important
+    }
     a-scene[embedded],.a-canvas{z-index:1}
     video{object-fit:cover!important;z-index:-1}
     #btn-back{z-index:10!important}
   </style>
 </head>
 <body class="bg-black">
+  <!-- メニュー -->
   <div id="selection-menu" class="flex flex-col items-center justify-center p-8 space-y-6 bg-gray-100">
     <h1 class="text-3xl font-bold text-gray-800 mb-4">ARアニメーションを選択</h1>
-    <button data-type="left" class="w-full max-w-sm p-4 bg-blue-500 text-white rounded-lg shadow-md text-lg font-semibold hover:bg-blue-600 transition">左に行く</button>
-    <button data-type="right" class="w-full max-w-sm p-4 bg-green-500 text-white rounded-lg shadow-md text-lg font-semibold hover:bg-green-600 transition">右に行く</button>
+    <button data-type="left"     class="w-full max-w-sm p-4 bg-blue-500  text-white rounded-lg shadow-md text-lg font-semibold hover:bg-blue-600  transition">左に行く</button>
+    <button data-type="right"    class="w-full max-w-sm p-4 bg-green-500 text-white rounded-lg shadow-md text-lg font-semibold hover:bg-green-600 transition">右に行く</button>
     <button data-type="approach" class="w-full max-w-sm p-4 bg-yellow-500 text-white rounded-lg shadow-md text-lg font-semibold hover:bg-yellow-600 transition">近づく</button>
-    <button data-type="away" class="w-full max-w-sm p-4 bg-red-500 text-white rounded-lg shadow-md text-lg font-semibold hover:bg-red-600 transition">遠ざかる</button>
+    <button data-type="away"     class="w-full max-w-sm p-4 bg-red-500   text-white rounded-lg shadow-md text-lg font-semibold hover:bg-red-600   transition">遠ざかる</button>
   </div>
 
+  <!-- AR表示 -->
   <div id="ar-container" class="hidden relative">
     <a-scene embedded
       arjs="sourceType: webcam; debugUIEnabled: false;
             sourceParameters: { video: { width: { ideal: 1280 }, height: { ideal: 960 }, facingMode: { ideal: 'environment' } } }">
-      <!-- emitevents を付けて markerFound / markerLost を受け取る -->
+      <!-- emitevents で markerFound/markerLost を発火 -->
       <a-marker id="marker" type="pattern" url="pattern-Cat.patt" emitevents="true"></a-marker>
       <a-entity camera></a-entity>
     </a-scene>
@@ -40,87 +47,170 @@
   </div>
 
   <script>
-    // 追加: THREEのベクトル→A-Frame属性文字列
+    // ------- ユーティリティ -------
     function vecToAttr(v){ return `${v.x} ${v.y} ${v.z}`; }
 
-    // 追加: marker.matrixWorldの回転成分からワールド軸ベクトルを得る
-    function getWorldAxisFromMarker(markerObj3D, axis /* 'x' | 'y' | 'z' */){
-        const m = new THREE.Matrix4();
-        m.extractRotation(markerObj3D.matrixWorld);
-        const v = new THREE.Vector3(
+    // marker.matrixWorld の回転からワールド軸ベクトル(+X/+Y/+Z)を取得
+    function getWorldAxisFromMarker(markerObj3D, axis /* 'x'|'y'|'z' */){
+      const m = new THREE.Matrix4();
+      m.extractRotation(markerObj3D.matrixWorld);
+      const v = new THREE.Vector3(
         axis === 'x' ? 1 : 0,
         axis === 'y' ? 1 : 0,
         axis === 'z' ? 1 : 0
-        );
-        v.applyMatrix4(m).normalize(); // ワールド方向ベクトル
-        return v;
+      );
+      v.applyMatrix4(m).normalize();
+      return v;
     }
 
-    // 既存: マーカー姿勢を一度だけモデルへコピー
-    function copyMarkerWorldTransformTo(entity) {
+    document.addEventListener('DOMContentLoaded', () => {
+      const menu = document.getElementById('selection-menu');
+      const arContainer = document.getElementById('ar-container');
+      const scene = document.querySelector('a-scene');
+      const marker = document.getElementById('marker');
+      const backButton = document.getElementById('btn-back');
+
+      let placed = false;       // 一度だけ出現させる
+      let currentType = null;   // 選択アニメ種類
+      let model = null;         // 生成したモデル
+      let onFirstFound = null;  // 1回限りのリスナー
+
+      // メニューのボタン → 種別選択してAR開始
+      document.querySelectorAll('#selection-menu button').forEach(btn => {
+        btn.addEventListener('click', () => {
+          currentType = btn.getAttribute('data-type');
+          startAR();
+        });
+      });
+
+      backButton.addEventListener('click', showMenu);
+
+      // --- コア: 初回 markerFound で一度だけ設置 ---
+      function handleFirstMarkerFound() {
+        if (placed) return;
+
+        // モデル生成
+        model = document.createElement('a-entity');
+        model.setAttribute('id', 'current-model');
+        model.setAttribute('gltf-model', 'bird3.glb');
+
+        // マーカーのワールド姿勢を一度だけコピー → その位置に出現
+        copyMarkerWorldTransformTo(model);
+
+        // 種別に応じたアニメ（以後はマーカー無関係に進む）
+        applyAnimation(model, currentType);
+
+        // シーン直下に追加
+        scene.appendChild(model);
+
+        placed = true;
+
+        // 一回限りのリスナー解除
+        if (onFirstFound) {
+          marker.removeEventListener('markerFound', onFirstFound);
+          onFirstFound = null;
+        }
+      }
+
+      function startAR() {
+        // 画面切替
+        menu.classList.add('hidden');
+        arContainer.classList.remove('hidden');
+        // レイアウト調整
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+
+        // 前回のモデルやリスナーを片付け
+        cleanupModel();
+        placed = false;
+
+        // 初回のみ発火させる markerFound
+        onFirstFound = handleFirstMarkerFound;
+        marker.addEventListener('markerFound', onFirstFound, { once: true });
+      }
+
+      function showMenu() {
+        arContainer.classList.add('hidden');
+        menu.classList.remove('hidden');
+        cleanupModel();
+        placed = false;
+        currentType = null;
+        if (onFirstFound) {
+          marker.removeEventListener('markerFound', onFirstFound);
+          onFirstFound = null;
+        }
+      }
+
+      function cleanupModel() {
+        const existing = document.getElementById('current-model');
+        if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+        model = null;
+      }
+
+      // マーカーのワールド姿勢を entity にコピー
+      function copyMarkerWorldTransformTo(entity) {
         const mObj = marker.object3D;
         const eObj = entity.object3D;
         eObj.matrix.copy(mObj.matrixWorld);
         eObj.matrix.decompose(eObj.position, eObj.quaternion, eObj.scale);
-    }
+      }
 
-    // ここを差し替え: “マーカーの向き”に沿ってP1を計算しpositionアニメ
-    function applyAnimation(entity, type) {
+      // 種別ごとのアニメ設定
+      // 左/右：マーカーの±X方向へ往復移動
+      // 近づく：マーカーの -Z 方向へ一方通行
+      // 遠ざかる：マーカーの +Z 方向へ一方通行
+      function applyAnimation(entity, type) {
         const eObj = entity.object3D;
-
-        // 出現直後のワールド座標をfromにする
-        const P0 = eObj.position.clone();
-
-        // マーカー基準の左右方向をワールドに変換
-        // left  = マーカーの -X 方向、right = +X 方向
-        // approach/away は従来どおりスケールで演出（向きは保持）
-        const moveDist = 5; // 任意の距離(調整可)
+        const P0 = eObj.position.clone();   // 現在ワールド座標
+        const moveDist = 5;                 // 移動距離（調整可）
 
         if (type === 'left' || type === 'right') {
-        const xAxis = getWorldAxisFromMarker(marker.object3D, 'x'); // +X
-        const dir = (type === 'left') ? xAxis.clone().multiplyScalar(-1)
-                                        : xAxis.clone();               // -X or +X
-        const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
+          const xAxis = getWorldAxisFromMarker(marker.object3D, 'x'); // +X
+          const dir = (type === 'left') ? xAxis.clone().multiplyScalar(-1) : xAxis.clone();
+          const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
 
-        // マーカーの向きをそのまま使うので rotation は設定しない
-        entity.setAttribute('scale', '3 3 3');
-        entity.setAttribute('animation', {
+          entity.setAttribute('scale', '3 3 3'); // 任意
+          entity.setAttribute('animation', {
             property: 'position',
             from: vecToAttr(P0),
             to: vecToAttr(P1),
             dur: 4000,
-            dir: 'alternate',   // 行ったり来たり
+            dir: 'alternate',
             loop: true
-        });
-        return;
+          });
+          return;
         }
 
         if (type === 'approach') {
-        // 近づく演出はスケールのみ（向きは marker のまま）
-        entity.setAttribute('scale', '1 1 1');
-        entity.setAttribute('animation', {
-            property: 'scale',
-            from: '1 1 1',
-            to: '10 10 10',
+          const zAxis = getWorldAxisFromMarker(marker.object3D, 'z'); // +Z (マーカー法線)
+          const dir = zAxis.clone().multiplyScalar(-1); // -Z = カメラ側(“近づく”)
+          const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
+
+          entity.setAttribute('animation', {
+            property: 'position',
+            from: vecToAttr(P0),
+            to: vecToAttr(P1),
             dur: 15000,
             loop: false
-        });
-        return;
+          });
+          return;
         }
 
         if (type === 'away') {
-        entity.setAttribute('scale', '10 10 10');
-        entity.setAttribute('animation', {
-            property: 'scale',
-            from: '10 10 10',
-            to: '1 1 1',
+          const zAxis = getWorldAxisFromMarker(marker.object3D, 'z'); // +Z
+          const dir = zAxis.clone(); // +Z = 奥へ(“遠ざかる”)
+          const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
+
+          entity.setAttribute('animation', {
+            property: 'position',
+            from: vecToAttr(P0),
+            to: vecToAttr(P1),
             dur: 20000,
             loop: false
-        });
-        return;
+          });
+          return;
         }
-    }
+      }
+    });
   </script>
-
 </body>
 </html>
