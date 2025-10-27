@@ -116,7 +116,6 @@
         // 画面切替
         menu.classList.add('hidden');
         arContainer.classList.remove('hidden');
-        // レイアウト調整
         setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
 
         // 前回のモデルやリスナーを片付け
@@ -155,20 +154,20 @@
       }
 
       // 種別ごとのアニメ設定
-      // 左/右：マーカーの±X方向へ往復移動
-      // 近づく：マーカーの -Z 方向へ一方通行
-      // 遠ざかる：マーカーの +Z 方向へ一方通行
+      // 左/右：マーカーの±X方向へ往復「位置」移動（方向は検出瞬間のマーカー基準）
+      // 近づく/遠ざかる：位置は固定、スケールのみ変化
       function applyAnimation(entity, type) {
         const eObj = entity.object3D;
         const P0 = eObj.position.clone();   // 現在ワールド座標
-        const moveDist = 5;                 // 移動距離（調整可）
+        const moveDist = 5;                 // 左右の移動距離（調整可）
 
         if (type === 'left' || type === 'right') {
           const xAxis = getWorldAxisFromMarker(marker.object3D, 'x'); // +X
           const dir = (type === 'left') ? xAxis.clone().multiplyScalar(-1) : xAxis.clone();
           const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
 
-          entity.setAttribute('scale', '3 3 3'); // 任意
+          // 向きは検出時のまま。スケールは任意で見やすく。
+          entity.setAttribute('scale', '3 3 3');
           entity.setAttribute('animation', {
             property: 'position',
             from: vecToAttr(P0),
@@ -181,14 +180,12 @@
         }
 
         if (type === 'approach') {
-          const zAxis = getWorldAxisFromMarker(marker.object3D, 'z'); // +Z (マーカー法線)
-          const dir = zAxis.clone().multiplyScalar(-1); // -Z = カメラ側(“近づく”)
-          const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
-
+          // 位置は固定。スケールで“近づく”表現
+          entity.setAttribute('scale', '1 1 1'); // 初期サイズ
           entity.setAttribute('animation', {
-            property: 'position',
-            from: vecToAttr(P0),
-            to: vecToAttr(P1),
+            property: 'scale',
+            from: '1 1 1',
+            to: '10 10 10',
             dur: 15000,
             loop: false
           });
@@ -196,14 +193,12 @@
         }
 
         if (type === 'away') {
-          const zAxis = getWorldAxisFromMarker(marker.object3D, 'z'); // +Z
-          const dir = zAxis.clone(); // +Z = 奥へ(“遠ざかる”)
-          const P1 = P0.clone().add(dir.multiplyScalar(moveDist));
-
+          // 位置は固定。スケールで“遠ざかる”表現
+          entity.setAttribute('scale', '10 10 10'); // 初期サイズを大きく
           entity.setAttribute('animation', {
-            property: 'position',
-            from: vecToAttr(P0),
-            to: vecToAttr(P1),
+            property: 'scale',
+            from: '10 10 10',
+            to: '1 1 1',
             dur: 20000,
             loop: false
           });
